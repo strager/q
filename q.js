@@ -48,9 +48,15 @@ try {
     if (typeof MessageChannel !== "undefined") {
         // modern browsers
         // http://www.nonblocking.io/2011/06/windownexttick.html
-        var channel = new MessageChannel();
         enqueue = function (task) {
-            channel.port1.onmessage = task;
+            var channel = new MessageChannel();
+            channel.port1.onmessage = function () {
+                // prevent memory leaks
+                channel.port1.onmessage = null;
+                channel = null;
+
+                task();
+            };
             channel.port2.postMessage();
         };
     } else {
