@@ -24,18 +24,18 @@
 
     // RequireJS
     if (typeof define === "function") {
-        define(function (require, exports) {
-            definition(require, exports);
+        define(function (require, exports, module) {
+            definition(require, exports, module);
         });
     // CommonJS
     } else if (typeof exports === "object") {
-        definition(require, exports);
+        definition(require, exports, module);
     // <script>
     } else {
-        definition(undefined, Q = {});
+        Q = definition(undefined, {}, {});
     }
 
-})(function (serverSideRequire, exports, undefined) {
+})(function (serverSideRequire, exports, module, undefined) {
 "use strict";
 
 
@@ -89,6 +89,11 @@ var reduce = Array.prototype.reduce || function (callback, basis) {
     }
     return basis;
 };
+// Spidermonkey Shims
+var isStopIteration = function (exception) {
+    return Object.prototype.toString.call(exception)
+        === "[object StopIteration]";
+}
 
 var print = typeof console === "undefined" ? identity : function (message) {
     console.log(message);
@@ -205,12 +210,13 @@ Promise.prototype.then = function (fulfilled, rejected) {
 // Chainable methods
 reduce.call(
     [
+        "when",
         "get", "put", "del",
         "post", "invoke",
         "keys",
         "apply", "call",
-        "wait", "join",
-        "fail", "fin", "spy",
+        "all", "wait", "join",
+        "fail", "fin", "spy", // XXX spy deprecated
         "report", "end"
     ],
     function (prev, name) {
@@ -480,6 +486,64 @@ var valueOf = function (value) {
 };
 
 /**
+ * The async function is a decorator for generator functions, turning
+ * them into asynchronous generators.  This presently only works in
+ * Firefox/Spidermonkey, however, this code does not cause syntax
+ * errors in older engines.  This code should continue to work and
+ * will in fact improve over time as the language improves.
+ *
+ * Decorates a generator function such that:
+ *  - it may yield promises
+ *  - execution will continue when that promise is fulfilled
+ *  - the value of the yield expression will be the fulfilled value
+ *  - it returns a promise for the return value (when the generator
+ *    stops iterating)
+ *  - the decorated function returns a promise for the return value
+ *    of the generator or the first rejected promise among those
+ *    yielded.
+ *  - if an error is thrown in the generator, it propagates through
+ *    every following yield until it is caught, or until it escapes
+ *    the generator function altogether, and is translated into a
+ *    rejection for the promise returned by the decorated generator.
+ *  - in present implementations of generators, when a generator
+ *    function is complete, it throws ``StopIteration``, ``return`` is
+ *    a syntax error in the presence of ``yield``, so there is no
+ *    observable return value. There is a proposal[1] to add support
+ *    for ``return``, which would permit the value to be carried by a
+ *    ``StopIteration`` instance, in which case it would fulfill the
+ *    promise returned by the asynchronous generator.  This can be
+ *    emulated today by throwing StopIteration explicitly with a value
+ *    property.
+ *
+ *  [1]: http://wiki.ecmascript.org/doku.php?id=strawman:async_functions#reference_implementation
+ *
+ */
+exports.async = async;
+function async(makeGenerator) {
+    return function () {
+        // when verb is "send", arg is a value
+        // when verb is "throw", arg is a reason/error
+        var continuer = function (verb, arg) {
+            var result;
+            try {
+                result = generator[verb](arg);
+            } catch (exception) {
+                if (isStopIteration(exception)) {
+                    return exception.value;
+                } else {
+                    return reject(exception);
+                }
+            }
+            return when(result, callback, errback);
+        };
+        var generator = makeGenerator.apply(this, arguments);
+        var callback = continuer.bind(continuer, "send");
+        var errback = continuer.bind(continuer, "throw");
+        return callback();
+    };
+}
+
+/**
  * Constructs a promise method that can be used to safely observe resolution of
  * a promise for an arbitrarily named method like "propfind" in a future turn.
  *
@@ -590,15 +654,31 @@ exports.call = function (value, context) {
  */
 exports.keys = Method("keys");
 
+// By Mark Miller
+// http://wiki.ecmascript.org/doku.php?id=strawman:concurrency&rev=1308776521#allfulfilled
+exports.all = all;
+function all(promises) {
+    return when(promises, function (promises) {
+        var countDown = promises.length;
+        var values = [];
+        if (countDown === 0)
+            return ref(values);
+        var deferred = defer();
+        reduce.call(promises, function (undefined, promise, index) {
+            when(promise, function (answer) {
+                values[index] = answer;
+                if (--countDown === 0)
+                    deferred.resolve(values);
+            }, deferred.reject);
+        }, undefined);
+        return deferred.promise;
+    });
+}
+
 /**
  */
 exports.wait = function (promise) {
-    var args = Array.prototype.slice.call(arguments, 1);
-    return reduce.call(args, function (promise, next) {
-        return when(next, function () {
-            return promise;
-        });
-    }, promise);
+    return all(arguments).get(0);
 };
 
 /**
@@ -606,14 +686,7 @@ exports.wait = function (promise) {
 exports.join = function () {
     var args = Array.prototype.slice.call(arguments);
     var callback = args.pop();
-    return reduce.call(args, function (done, next, i) {
-        return when(next, function (next) {
-            return when(done, function () {
-                args[i] = next;
-            });
-        });
-    }, undefined)
-    .then(function () {
+    return all(args).then(function (args) {
         return callback.apply(undefined, args);
     });
 };
@@ -627,25 +700,17 @@ function fail(promise, rejected) {
 
 /**
  */
+exports.spy = // XXX spy deprecated
 exports.fin = fin;
 function fin(promise, callback) {
     return when(promise, function (value) {
-        return callback(value, undefined);
+        return when(callback(undefined, value), function () {
+            return value;
+        });
     }, function (reason) {
-        return callback(undefined, reason);
-    });
-}
-
-/**
- */
-exports.spy = spy;
-function spy(promise, callback) {
-    return when(promise, function (value) {
-        callback(value, undefined);
-        return value;
-    }, function (reason) {
-        callback(undefined, reason);
-        return reject(reason);
+        return when(callback(reason), function () {
+            return reject(reason);
+        });
     });
 }
 
@@ -688,5 +753,15 @@ function forward(promise /* ... */) {
         promise.promiseSend.apply(promise, args);
     });
 }
+
+/*
+ * In module systems that support ``module.exports`` assignment or exports
+ * return, allow the ``ref`` function to be used as the ``Q`` constructor
+ * exported by the "q" module.
+ */
+for (var name in exports)
+    ref[name] = exports[name];
+module.exports = ref;
+return ref;
 
 });

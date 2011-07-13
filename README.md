@@ -38,13 +38,14 @@ including:
 Q conforms to many proposed standards, mostly by Kris Zyp and myself,
 with mentoring from Mark Miller: [UncommonJS/Promises][]
 [CommonJS/Promises/A][], [CommonJS/Promises/B][], and
-[CommonJS/Promises/D][].  Q is based on Tyler Close's ``ref_send``
-API for [Waterken][].
+[CommonJS/Promises/D][].  Q is based on Tyler Close's [ref_send][] API
+for [Waterken][].
 
 [UncommonJS/Promises]: https://github.com/kriskowal/uncommonjs/blob/master/promises/specification.md
 [CommonJS/Promises/A]: http://wiki.commonjs.org/wiki/Promises/A
 [CommonJS/Promises/B]: http://wiki.commonjs.org/wiki/Promises/B
 [CommonJS/Promises/D]: http://wiki.commonjs.org/wiki/Promises/D
+[ref_send]: http://waterken.svn.sourceforge.net/viewvc/waterken/server/trunk/waterken/config/file/site/ref_send.js?view=markup
 [Waterken]: http://waterken.sourceforge.net/
 
 
@@ -685,6 +686,13 @@ fulfilled function, with the given context and variadic
 arguments.
 
 
+## ``all([...promises])``
+
+Returns a promise for an array of the fulfillment of each
+respective promise, or rejects when the first promise is
+rejected.
+
+
 ## ``wait(...objects)``
 
 Returns a promise for the fulfilled value of the first
@@ -701,6 +709,16 @@ object to be rejected from left to right.  If and when all
 of the variadic object arguments have been fulfilled, the
 callback is called with the respective fulfillment values
 variadically.
+
+
+## ``fin(promise, callback(reason, value))``
+
+Like a ``finally`` clause, allows you to observe either the
+fulfillment or rejection of a callback, but to do so without
+modifying the final value.  This is useful for collecting
+resources regardless of whether a job succeeded, like
+closing a database connection, shutting a server down, or
+deleting an unneeded key from an object.
 
 
 ## ``report(promise, message_opt)``
@@ -731,6 +749,15 @@ exception to emit a browser's ``onerror`` event or NodeJS's
 ``process`` ``"uncaughtException"``.
 
 
+## ``async(generatorFunction)``
+
+This is an experimental tool for converting a generator
+function into a deferred function.  This has the potential
+of reducing nested callbacks in engines that support
+``yield``.  See ``examples/async-generators/README.md`` for
+further information.
+
+
 Chaining
 --------
 
@@ -745,18 +772,22 @@ following are equivalent:
 
 The following functions are supported for chaining:
 
--   ``get``
--   ``put``
--   ``del``
--   ``post``
--   ``invoke``
--   ``apply``
--   ``call``
--   ``keys``
--   ``wait``
--   ``join``
--   ``report``
--   ``end``
+-   ``.when`` (``.then``)
+-   ``.get``
+-   ``.put``
+-   ``.del``
+-   ``.post``
+-   ``.invoke``
+-   ``.apply``
+-   ``.call``
+-   ``.keys``
+-   ``.all``
+-   ``.wait`` (``.all().get(0)``)
+-   ``.join`` (``.all().when(function ([...]) {}))``)
+-   ``.report``
+-   ``.fin``
+-   ``.end``
+
 
 Copyright 2009-2011 Kristopher Michael Kowal
 MIT License (enclosed)
