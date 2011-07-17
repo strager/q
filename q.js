@@ -57,7 +57,7 @@ try {
 
                 task();
             };
-            channel.port2.postMessage();
+            channel.port2.postMessage("");
         };
     } else {
         // old browsers
